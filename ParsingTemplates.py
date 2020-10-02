@@ -4,52 +4,90 @@ from aiohttp import ClientSession
 from time import time as current_time
 import os.path
 
-import safe_requests
+from bs4 import BeautifulSoup as BS
+
+LAST_REQUEST_TIME = current_time()
+DEFAULT_WAIT_TIME = 0.1
 
 # parse_function Ч функци€ дл€ разбора html-текста
 # urls Ч итерабельный объект со строками-урлами
-def parse_site(parse_function, urls, output_filename = None, wait_time = DEFAULT_WAIT_TIME, print_progress=False):
+async def parse_site(
+ parse_function,
+ urls,
+ filename = None, 
+ wait_time = DEFAULT_WAIT_TIME, 
+ print_progress=True):
     async with ClientSession() as session:
         queue = asyncio.Queue()
         # list of producers for async page loading
         producers = [asyncio.create_task(download_and_parse(parse_function, url, session, queue, print_progress)) for url in urls]
-        file_loader = asyncio.create_task(load_parsed_data_to_file(queue, output_filename, print_progress))
+        if filename is not None:
+            consumer = asyncio.create_task(load_parsed_data_to_file(queue, filename, print_progress))
+        else:
+            output_list = []
+            consumer = asyncio.create_task(collect_parsed_data_to_list(queue, output_list, print_progress))
         await asyncio.gather(*producers)
         await queue.join()
-        file_loader.cancel()
-        await asyncio.gather(file_loader, return_exceptions=True)
+        consumer.cancel()
+        #await asyncio.gather(consumer, return_exceptions=True)
+        #print(100500)
+        if filename is None:
+            return output_list
 
 async def load_parsed_data_to_file(queue, output_filename, print_progress):
     if print_progress:
         while True:
             data, url = await queue.get()
             async with aiofiles.open(filename, "a") as f:
-                for element in arr:
-                    await f.write(element + separator)
+                if type(data) == str:
+                    await f.write(data + '\n')
+                else:
+                    await f.writelines('\n'.join(data))
+                
+            print("Saved data from " + url)
+            queue.task_done()
+            print(queue.qsize())
+    else:
+        while True:
+            data = await queue.get()
+            async with aiofiles.open(filename, "a") as f:
+                if type(data) == str:
+                    await f.write(data + '\n')
+                else:
+                    await f.writelines('\n'.join(data))
+            queue.task_done()
+            print(queue.qsize())
+
+async def collect_parsed_data_to_list(queue, output_list, print_progress):
+    if print_progress:
+        while True:
+            data, url = await queue.get()
+            if type(data) == str:
+                output_list.append(data)
+            else:
+                output_list += data
             print("Saved data from " + url)
             queue.task_done()
     else:
         while True:
             data = await queue.get()
-            async with aiofiles.open(filename, "a") as f:
-                for element in arr:
-                    await f.write(element + separator)
+            if type(data) == str:
+                output_list.append(data)
+            else:
+                output_list += data
             queue.task_done()
 
 async def download_and_parse(parse_function, page, session, queue, print_progress):
-    html_text = await fetch_html(url, session)
-    if print_progress:
-        print("Downloaded " + url)
-    html = parse_html(html_text)
+    html_text = await fetch_html(page, session)
+    html = BS(html_text, 'html.parser')
     result = parse_function(html)
     if print_progress:
-        await queue.put((html, page))
+        await queue.put((result, page))
     else:
-        await queue.put(html)
-
-
-LAST_REQUEST_TIME = current_time()
-DEFAULT_WAIT_TIME = 0.1
+        await queue.put(result)
+    print(queue.qsize())
+    if print_progress:
+        print("Downloaded " + page)
 
 async def safe_get(url, session, wait_time=DEFAULT_WAIT_TIME):
     global LAST_REQUEST_TIME
